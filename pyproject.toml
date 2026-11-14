@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sellbird-leadlock"
+version = "0.1.0"
+description = "A Sellbird extension that connects Sellbird to the Leadlock CRM hub: one send rule and one tick step."
+readme = "README.md"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+# Sellbird itself is the host: install this package into Sellbird's own environment (tested on Sellbird 0.4.0).
+dependencies = []
+
+[project.entry-points."sellbird.extensions"]
+leadlock = "sellbird_leadlock.plugin:install"
+
+[tool.setuptools]
+packages = ["sellbird_leadlock"]
