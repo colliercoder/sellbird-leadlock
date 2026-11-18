@@ -6,10 +6,11 @@ is not running:
 - tick step `leadlock.orchestrator`: each heartbeat, in the process that sends email, records that the rule is
   registered there and whether the hold file loads now (a Sellbird setting; never an address or a hash).
 - GET /api/leadlock/orchestrator: that record, or null when no heartbeat has written it.
-- GET /api/leadlock/sent?after=<ISO>&after_id=<id>&limit=<n>: sent emails after a (time, outbox id) point,
-  oldest first, so a reader can page past the dashboard's newest 25 (an empty after_id: from that time on).
-  The address is returned (the Orchestrator matches it to its contact and logs only a hash); never the subject
-  or body.
+- GET /api/leadlock/sent?after=<ISO>&cursor=<cursor>&limit=<n>: sent emails oldest first, so a reader can page
+  past the dashboard's newest 25. Without a cursor, from `after` on; with one, strictly after it (each row carries
+  the cursor of its own position). Times are compared as times, never as text: Sellbird writes sent_at as
+  "2026-11-18T10:00:00.123456" and older rows may read "2026-11-18 10:00:00". Each row carries
+  email_sha256, the hash the hold file uses (holds.email_hash), never the address, subject or body.
 """
 from __future__ import annotations
 
@@ -43,22 +44,25 @@ async def beacon(ctx) -> None:
                                                      "file": file}, sort_keys=True))
 
 
-def _sql_ts(text: str) -> str | None:
+def _sql_time(text: str) -> str | None:
+    """An ISO time with a zone, as UTC text SQLite's julianday() reads."""
     try:
         d = datetime.fromisoformat(text.strip().replace("Z", "+00:00"))
     except (AttributeError, ValueError):
         return None
     if d.tzinfo is None:
         return None
-    return d.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    return d.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")
 
 
-def _iso_from_sql(ts) -> str:
+def _cursor(text: str):
+    """(julian day, outbox id) from "<julian day>|<id>", or None."""
+    day, bar, oid = text.partition("|")
     try:
-        d = datetime.fromisoformat(str(ts).replace(" ", "T", 1))
+        value = float(day)
     except ValueError:
-        return ""
-    return _iso(d if d.tzinfo else d.replace(tzinfo=timezone.utc))
+        return None
+    return (value, oid) if bar and oid and value == value else None
 
 
 async def _query(sql: str, params: tuple) -> list:
@@ -81,16 +85,33 @@ def router():
         return {"rule": rule if isinstance(rule, dict) else None, "version": __version__}
 
     @r.get(SENT_PATH)
-    async def sent(after: str = "", after_id: str = "", limit: int = 100):
-        since = _sql_ts(after)
-        if since is None or not 1 <= limit <= MAX_SENT:
-            return JSONResponse({"error": f"after must be an ISO time with a zone, limit 1 to {MAX_SENT}"},
-                                status_code=400)
-        rows = await _query("SELECT id, message_id, to_email, prospect_id, campaign_id, step, sent_at FROM outbox "
-                            "WHERE status = 'sent' AND (sent_at > ? OR (sent_at = ? AND id > ?)) "
-                            "ORDER BY sent_at, id LIMIT ?", (since, since, after_id, limit))
-        return {"sent": [{**{k: r.get(k) for k in ("id", "message_id", "to_email", "prospect_id", "campaign_id",
-                                                   "step")}, "sent_at": _iso_from_sql(r.get("sent_at"))}
+    async def sent(after: str = "", cursor: str = "", limit: int = 100):
+        bad = JSONResponse({"error": f"after must be an ISO time with a zone, cursor one this route gave, limit 1 "
+                                     f"to {MAX_SENT}"}, status_code=400)
+        if not 1 <= limit <= MAX_SENT:
+            return bad
+        if cursor:
+            point = _cursor(cursor)
+            if point is None:
+                return bad
+        else:
+            since = _sql_time(after)
+            if since is None:
+                return bad
+            rows = await _query("SELECT julianday(?) AS jd", (since,))
+            point = (rows[0]["jd"], "") if rows and rows[0].get("jd") is not None else None
+            if point is None:
+                return bad
+        rows = await _query(
+            "SELECT id, message_id, to_email, prospect_id, campaign_id, step, julianday(sent_at) AS jd, "
+            "strftime('%Y-%m-%dT%H:%M:%fZ', sent_at) AS at FROM outbox "
+            "WHERE status = 'sent' AND julianday(sent_at) IS NOT NULL "
+            "AND (julianday(sent_at) > ? OR (julianday(sent_at) = ? AND id > ?)) "
+            "ORDER BY julianday(sent_at), id LIMIT ?", (point[0], point[0], point[1], limit))
+        return {"sent": [{"id": r.get("id"), "message_id": r.get("message_id"),
+                          "email_sha256": holds.email_hash(r["to_email"]) if r.get("to_email") else "",
+                          "prospect_id": r.get("prospect_id"), "campaign_id": r.get("campaign_id"),
+                          "step": r.get("step"), "sent_at": r.get("at"), "cursor": f"{r['jd']!r}|{r['id']}"}
                          for r in rows]}
 
     return r

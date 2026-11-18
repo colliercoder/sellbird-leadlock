@@ -66,8 +66,10 @@ when the rule is not running:
 
 - a tick step, `leadlock.orchestrator`, that records each heartbeat that the rule is registered and whether the
   file loads (a Sellbird setting; no address or hash), shown at `GET /api/leadlock/orchestrator`;
-- `GET /api/leadlock/sent?after=<ISO time>&after_id=<outbox id>&limit=<1-200>`, sent emails oldest first, so the
-  Orchestrator can log every one, not only the dashboard's newest 25. No subject or body.
+- `GET /api/leadlock/sent?after=<ISO time>&limit=<1-200>`, then `?cursor=<the last row's cursor>`, sent emails
+  oldest first, so the Orchestrator can log every one, not only the dashboard's newest 25. Times are compared as
+  times, whatever form Sellbird stored them in. Each row carries `email_sha256`, the hash above, never the
+  address, subject or body.
 
 ## Install
 
