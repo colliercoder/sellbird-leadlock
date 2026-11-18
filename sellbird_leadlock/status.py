@@ -5,7 +5,9 @@ is not running:
 
 - tick step `leadlock.orchestrator`: each heartbeat, in the process that sends email, records that the rule is
   registered there and whether the hold file loads now (a Sellbird setting; never an address or a hash).
-- GET /api/leadlock/orchestrator: that record, or null when no heartbeat has written it.
+- GET /api/leadlock/orchestrator: that record, or null when no heartbeat has written it, and sent_without_time:
+  how many sent emails have a sent_at that is missing or not a time. The sent route cannot page those (it
+  compares times), so they never reach the Orchestrator's log; a count above 0 is worth a look.
 - GET /api/leadlock/sent?after=<ISO>&cursor=<cursor>&limit=<n>: sent emails oldest first, so a reader can page
   past the dashboard's newest 25. Without a cursor, from `after` on; with one, strictly after it (each row carries
   the cursor of its own position). Times are compared as times, never as text: Sellbird writes sent_at as
@@ -82,7 +84,9 @@ def router():
             rule = json.loads(rows[0]["value"]) if rows else None
         except (KeyError, TypeError, ValueError):
             rule = None
-        return {"rule": rule if isinstance(rule, dict) else None, "version": __version__}
+        unread = await _query("SELECT COUNT(*) AS n FROM outbox WHERE status = 'sent' AND julianday(sent_at) IS NULL", ())
+        return {"rule": rule if isinstance(rule, dict) else None, "version": __version__,
+                "sent_without_time": int(unread[0]["n"]) if unread else None}
 
     @r.get(SENT_PATH)
     async def sent(after: str = "", cursor: str = "", limit: int = 100):

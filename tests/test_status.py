@@ -75,7 +75,7 @@ def test_the_beacon_records_the_rule_and_the_files_state(client, state, tmp_path
     monkeypatch.setenv(holds.ENV, str(path))
     run(status.beacon(SimpleNamespace(state=state)))
     rule = client.get(status.STATUS_PATH).json()["rule"]
-    assert rule["file"] == "the hold file cannot be read" and rule["version"] == "0.2.0"
+    assert rule["file"] == "the hold file cannot be read" and rule["version"] == "0.2.1"
     assert abs(datetime.fromisoformat(rule["active_at"].replace("Z", "+00:00")) - NOW) < timedelta(minutes=1)
     path.write_text(json.dumps({"version": 1, "generated_at": NOW.strftime("%Y-%m-%dT%H:%M:%SZ"), "paused": False,
                                 "test_only": False, "allow_email_sha256": [], "cancel_email_sha256": [],
@@ -149,3 +149,21 @@ def test_a_row_without_an_address_keeps_its_place(client, state):
                                     {"cursor": "nonsense"}, {"cursor": "2461362.5|"}, {"cursor": "nan|o1"}])
 def test_a_bad_query_is_refused(client, params):
     assert client.get(status.SENT_PATH, params=params).status_code == 400
+
+
+def test_the_status_counts_sent_rows_without_a_readable_time(client, state):
+    """Rows the sent route cannot page (its compare is on julianday) are counted, so a reader can see them."""
+    assert client.get(status.STATUS_PATH).json()["sent_without_time"] == 0
+    day = (NOW - timedelta(days=1)).strftime("%Y-%m-%d")
+    run(_send(state, "o_ok", "a@example.com", raw=f"{day}T10:00:00.123456"))
+    run(_send(state, "o_bad", "b@example.com", raw="yesterday"))
+    run(_send(state, "o_none", "c@example.com", raw=""))
+
+    async def null_time():
+        import aiosqlite
+        async with aiosqlite.connect(state.db_path) as db:
+            await db.execute("UPDATE outbox SET sent_at = NULL WHERE id = 'o_none'")
+            await db.commit()
+    run(null_time())
+    assert client.get(status.STATUS_PATH).json()["sent_without_time"] == 2
+    assert [r["id"] for r in pages(client, f"{day}T09:00:00Z", 10)] == ["o_ok"]
