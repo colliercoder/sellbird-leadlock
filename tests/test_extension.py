@@ -152,8 +152,9 @@ def test_the_next_read_overlaps_and_resends_harmlessly(state):
     assert any(t["external_id"] == "<m1@mail.example.com>" for t in again)  # resent; the hub drops duplicates
 
 
-def test_install_registers_one_rule_and_one_step():
+def test_install_registers_one_rule_and_one_step(monkeypatch):
     from sellbird.extensions import Registry
+    monkeypatch.delenv("SELLBIRD_LEADLOCK_HOLDS", raising=False)
     r = Registry()
     plugin.install(r)
     assert list(r.send_rules) == ["leadlock.crosschannel"] and list(r.tick_steps) == ["leadlock.events"]

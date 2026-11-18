@@ -1,4 +1,5 @@
-"""The extension: one send rule and one tick step (Sellbird's extension API, docs/extensions.md).
+"""The extension: send rules and one tick step (Sellbird's extension API, docs/extensions.md). The second send
+rule, `leadlock.orchestrator`, is in holds.py and is registered only when SELLBIRD_LEADLOCK_HOLDS is set.
 
 Send rule `leadlock.crosschannel`, asked before every email after Sellbird's own checks. It can only stop an
 email, never let one through, and anything that goes wrong holds the email:
@@ -177,5 +178,14 @@ async def push_events(ctx) -> None:
 
 
 def install(registry) -> None:
+    import os
+    from . import holds
     registry.add_send_rule("leadlock.crosschannel", crosschannel)
     registry.add_tick_step("leadlock.events", push_events)
+    if holds.enabled():  # the Leadlock Orchestrator's hold file (holds.py), only where it is set up
+        from . import status
+        registry.add_send_rule("leadlock.orchestrator", holds.orchestrator)
+        registry.add_tick_step("leadlock.orchestrator", status.beacon)
+        registry.add_router(status.router())
+        registry.add_agent_route("GET", status.STATUS_PATH)
+        registry.add_agent_route("GET", status.SENT_PATH)
