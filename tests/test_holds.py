@@ -169,20 +169,66 @@ def test_the_rule_reads_only_its_file(holds_file, monkeypatch):
 # install
 
 
-def test_install_adds_the_rule_only_when_the_file_is_set(monkeypatch, tmp_path):
+def registered(monkeypatch, **env):
     from sellbird.extensions import Registry
-    monkeypatch.delenv(holds.ENV, raising=False)
+    for k in (holds.ENV, holds.REQUIRED_ENV):
+        monkeypatch.delenv(k, raising=False)
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
     r = Registry()
     plugin.install(r)
-    assert list(r.send_rules) == ["leadlock.crosschannel"]
-    monkeypatch.setenv(holds.ENV, str(tmp_path / "holds.json"))
-    r = Registry()
-    plugin.install(r)
+    return r
+
+
+def test_install_adds_the_rule_only_when_the_file_is_set(monkeypatch, tmp_path):
+    r = registered(monkeypatch)
+    assert list(r.send_rules) == ["leadlock.crosschannel"] and list(r.tick_steps) == ["leadlock.events"]
+    assert r.routers == [] and r.agent_routes == []
+    r = registered(monkeypatch, **{holds.ENV: str(tmp_path / "holds.json")})
     assert list(r.send_rules) == ["leadlock.crosschannel", "leadlock.orchestrator"]
-    assert list(r.tick_steps) == ["leadlock.events"]
+    assert list(r.tick_steps) == ["leadlock.events", "leadlock.orchestrator"]
+    assert r.agent_routes == [("GET", "/api/leadlock/orchestrator"), ("GET", "/api/leadlock/sent")]
+
+
+@pytest.mark.parametrize("path", [None, ""])
+def test_required_registers_the_rule_and_holds_without_a_path(monkeypatch, path):
+    env = {holds.REQUIRED_ENV: "1"}
+    if path is not None:
+        env[holds.ENV] = path
+    r = registered(monkeypatch, **env)
+    assert "leadlock.orchestrator" in r.send_rules
+    assert status() == "held" and holds.ENV in verdict()[1]
+
+
+def test_required_must_be_exactly_1(monkeypatch):
+    assert "leadlock.orchestrator" not in registered(monkeypatch, **{holds.REQUIRED_ENV: "yes"}).send_rules
 
 
 def test_the_hash_is_sha256_of_the_stripped_lower_cased_address():
     """What the Orchestrator writes (its email_holds.email_hash)."""
     import hashlib
     assert holds.email_hash(" Ann@Example.com ") == hashlib.sha256(b"ann@example.com").hexdigest()
+
+
+# the same address, however it is written
+
+
+@pytest.mark.parametrize("written", ["ann@example.com.", "ANN@EXAMPLE.COM", " ann@Example.Com. "])
+def test_a_trailing_dot_and_case_do_not_change_the_hash(written):
+    assert holds.email_hash(written) == holds.email_hash(ANN)
+
+
+def test_an_idn_domain_is_hashed_as_punycode():
+    assert holds.email_hash("ann@bücher.example") == holds.email_hash("ann@xn--bcher-kva.example")
+
+
+def test_a_plus_alias_is_another_address():
+    assert holds.email_hash("ann+promo@example.com") != holds.email_hash(ANN)
+
+
+def test_listed_domains_match_with_a_trailing_dot_or_unicode(holds_file):
+    holds_file(doc(hold_domains=["xn--bcher-kva.example", "blocked.example.com"]))
+    assert status("x@bücher.example") == "held"
+    assert status("x@sub.bücher.example.") == "held"
+    assert status("x@blocked.example.com.") == "held"
+    assert status(ANN) is None

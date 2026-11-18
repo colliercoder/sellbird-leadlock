@@ -33,7 +33,8 @@ It reads Sellbird's outbox, conversations, prospects and suppressions tables rea
 dashboard does. Each read starts an hour before the last one, and the hub drops anything it already has. If the
 CRM is busy or down, nothing is lost: the next heartbeat sends it again.
 
-**A second send rule, `leadlock.orchestrator`** (since 0.2.0), only where `SELLBIRD_LEADLOCK_HOLDS` is set. The
+**A second send rule, `leadlock.orchestrator`** (since 0.2.0), only where `SELLBIRD_LEADLOCK_HOLDS` or
+`SELLBIRD_LEADLOCK_HOLDS_REQUIRED=1` is set. The
 Leadlock Orchestrator writes a small hold file on the same machine each run; this rule reads that file before
 every email, with no network:
 
@@ -47,7 +48,9 @@ every email, with no network:
 | the recipient's domain, or a domain above it, in `hold_domains` | held |
 | none of these | goes on to Sellbird's own checks |
 
-A hash is the sha256 hex of the address, stripped and lower-cased. The file looks like this (made-up values):
+A hash is the sha256 hex of the address, stripped and lower-cased, with its domain's trailing dot removed and an
+international domain in punycode (`xn--`). A plus-alias (`ann+news@`) is a different address. Listed domains are
+compared the same way. The file looks like this (made-up values):
 
 ```json
 {"version": 1, "generated_at": "2026-01-01T12:00:00Z", "paused": false, "test_only": false,
@@ -57,6 +60,14 @@ A hash is the sha256 hex of the address, stripped and lower-cased. The file look
 
 A hash of an email address can be reversed by guessing common addresses, so treat the file as private: readable
 only by the user Sellbird runs as, never committed or copied anywhere else.
+
+With the rule come two things the Orchestrator reads back with Sellbird's agent token (GET only), so it notices
+when the rule is not running:
+
+- a tick step, `leadlock.orchestrator`, that records each heartbeat that the rule is registered and whether the
+  file loads (a Sellbird setting; no address or hash), shown at `GET /api/leadlock/orchestrator`;
+- `GET /api/leadlock/sent?after=<ISO time>&after_id=<outbox id>&limit=<1-200>`, sent emails oldest first, so the
+  Orchestrator can log every one, not only the dashboard's newest 25. No subject or body.
 
 ## Install
 
@@ -77,10 +88,12 @@ LEADLOCK_CRM_TOKEN=<your workspace's agency token>
 
 Until all three are set, the send rule holds every email (fail closed) and the tick step sends nothing.
 
-To use the Orchestrator's hold file as well, set its full path:
+To use the Orchestrator's hold file as well, set its full path, and on an Orchestrator install also the
+required switch, so that a restart that loses the path holds every email instead of dropping the rule:
 
 ```
 SELLBIRD_LEADLOCK_HOLDS=/path/to/the/orchestrator/hold-file.json
+SELLBIRD_LEADLOCK_HOLDS_REQUIRED=1
 ```
 
 ## Tests

@@ -182,5 +182,10 @@ def install(registry) -> None:
     from . import holds
     registry.add_send_rule("leadlock.crosschannel", crosschannel)
     registry.add_tick_step("leadlock.events", push_events)
-    if os.environ.get(holds.ENV):  # the Leadlock Orchestrator's hold file (holds.py), only where it is set up
+    if holds.enabled():  # the Leadlock Orchestrator's hold file (holds.py), only where it is set up
+        from . import status
         registry.add_send_rule("leadlock.orchestrator", holds.orchestrator)
+        registry.add_tick_step("leadlock.orchestrator", status.beacon)
+        registry.add_router(status.router())
+        registry.add_agent_route("GET", status.STATUS_PATH)
+        registry.add_agent_route("GET", status.SENT_PATH)

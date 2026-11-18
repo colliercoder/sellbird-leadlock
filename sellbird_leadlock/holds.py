@@ -10,8 +10,11 @@ email:
     - the recipient's domain, or a parent domain, is in "hold_domains"        -> Hold
     - otherwise                                                               -> None: Sellbird's own checks decide
 
-A hash is the sha256 hex of the address, stripped and lower-cased. The path comes from the environment variable
-SELLBIRD_LEADLOCK_HOLDS; the rule is registered only when it is set (plugin.install).
+A hash is the sha256 hex of the normalized address: stripped and lower-cased, its domain without a trailing dot
+and in punycode (an IDN domain as xn--). A plus-alias is a different address. The path comes from the
+environment variable SELLBIRD_LEADLOCK_HOLDS. The rule is registered when it is set, or when
+SELLBIRD_LEADLOCK_HOLDS_REQUIRED=1 (an Orchestrator install), which then holds every email while the path is
+unset or empty (plugin.install).
 
 The file looks like:
     {"version": 1, "generated_at": "2026-01-01T12:00:00Z", "paused": false, "test_only": false,
@@ -27,6 +30,7 @@ import re
 from datetime import datetime, timedelta, timezone
 
 ENV = "SELLBIRD_LEADLOCK_HOLDS"
+REQUIRED_ENV = "SELLBIRD_LEADLOCK_HOLDS_REQUIRED"
 MAX_AGE = timedelta(hours=2)
 MAX_BYTES = 8 * 1024 * 1024
 VERSION = 1
@@ -39,8 +43,27 @@ class Unusable(Exception):
     """The file cannot be trusted; every email holds."""
 
 
+def domain(name: str) -> str:
+    """Lower-cased, no trailing dot, punycode (the stdlib's IDNA codec). One the codec refuses stays as it is."""
+    d = name.strip().lower().rstrip(".")
+    try:
+        return d.encode("idna").decode("ascii")
+    except UnicodeError:
+        return d
+
+
+def normalize(address: str) -> str:
+    local, at, dom = address.strip().lower().rpartition("@")
+    return f"{local}@{domain(dom)}" if at else address.strip().lower()
+
+
 def email_hash(address: str) -> str:
-    return hashlib.sha256(address.strip().lower().encode("utf-8")).hexdigest()
+    """sha256 hex of the normalized address: the same function as the Orchestrator's email_holds.email_hash."""
+    return hashlib.sha256(normalize(address).encode("utf-8")).hexdigest()
+
+
+def enabled() -> bool:
+    return bool(os.environ.get(ENV)) or os.environ.get(REQUIRED_ENV) == "1"
 
 
 def _when(text) -> datetime:
@@ -86,7 +109,7 @@ def load(path: str, now: datetime) -> dict:
     domains = doc.get("hold_domains")
     if not isinstance(domains, list) or not all(isinstance(d, str) and DOMAIN.fullmatch(d) for d in domains):
         raise Unusable("hold_domains is not a list of domains")
-    out["hold_domains"] = set(domains)
+    out["hold_domains"] = {domain(d) for d in domains}
     return out
 
 
@@ -101,8 +124,8 @@ def decide(holds: dict, email: str):
         return "hold", "the Orchestrator is in test phase and this is not a test contact"
     if h in holds["hold_email_sha256"]:
         return "hold", "touched on another channel today (Orchestrator)"
-    domain = email.rsplit("@", 1)[-1]
-    if any(domain == d or domain.endswith("." + d) for d in holds["hold_domains"]):
+    dom = domain(email.rsplit("@", 1)[-1])
+    if any(dom == d or dom.endswith("." + d) for d in holds["hold_domains"]):
         return "hold", "the recipient's domain is on the do-not-contact list (Orchestrator)"
     return None, ""
 
