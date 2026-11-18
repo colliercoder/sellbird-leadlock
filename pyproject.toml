@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sellbird-leadlock"
-version = "0.2.0"
+version = "0.2.1"
 description = "A Sellbird extension that connects Sellbird to the Leadlock CRM hub and the Leadlock Orchestrator: send rules and a tick step."
 readme = "README.md"
 license = "AGPL-3.0-or-later"
